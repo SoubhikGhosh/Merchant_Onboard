@@ -6,6 +6,7 @@ import io
 import logging
 import time
 import os
+import json
 from typing import Dict, Any
 
 # Configure simple logging
@@ -141,8 +142,16 @@ def analyze_image(image_data: bytes) -> Dict[str, Any]:
         # Log completion
         elapsed_time = time.time() - start_time
         logger.info(f"Analysis completed in {elapsed_time:.2f} seconds")
+
+        json_str = response.text
+        if json_str.startswith("```json"):
+            json_str = json_str[7:]
+        if json_str.endswith("```"):
+            json_str = json_str[:-3]
+            
+        resp = json.loads(json_str.strip())
         
-        return response.text
+        return resp
         
     except Exception as e:
         logger.error(f"Error during image analysis: {str(e)}")
@@ -205,4 +214,4 @@ def health_check():
 
 if __name__ == '__main__':
     logger.info("Starting shop analyzer service")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=True)
