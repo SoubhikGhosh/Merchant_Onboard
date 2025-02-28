@@ -143,7 +143,7 @@ def analyze_image(image_data: bytes) -> Dict[str, Any]:
         elapsed_time = time.time() - start_time
         logger.info(f"Analysis completed in {elapsed_time:.2f} seconds")
 
-        json_str = response.text
+        json_str = response.text.strip()
         if json_str.startswith("```json"):
             json_str = json_str[7:]
         if json_str.endswith("```"):
