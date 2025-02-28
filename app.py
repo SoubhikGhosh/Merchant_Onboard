@@ -190,6 +190,19 @@ def analyze_shop():
                 "error": "Empty image data",
                 "status": "error"
             }), 400
+            
+        # Save image to audit folder
+        audit_folder = "audit"
+        if not os.path.exists(audit_folder):
+            os.makedirs(audit_folder)
+            logger.info(f"Created audit folder: {audit_folder}")
+            
+        timestamp = time.strftime("%Y%m%d%H%M%S")
+        image_path = os.path.join(audit_folder, f"{timestamp}.jpg")
+        
+        with open(image_path, "wb") as f:
+            f.write(image_data)
+        logger.info(f"Saved audit image to {image_path}")
 
         analysis_result = analyze_image(image_data)
         
