@@ -30,7 +30,7 @@ CORS(app, resources={
 })
 
 # Configure Google API
-GOOGLE_API_KEY = "AIzaSyD2ArK74wBtL1ufYmpyrV2LqaOBrSi3mlU"
+GOOGLE_API_KEY = "AIzaSyCD6DGeERwWQbBC6BK1Hq0ecagQj72rqyQ"
 genai.configure(api_key=GOOGLE_API_KEY)
 
 @app.after_request
