@@ -7,6 +7,10 @@ import logging
 import time
 import os
 import json
+import psycopg2
+from psycopg2.extras import Json
+import base64
+from datetime import datetime
 from typing import Dict, Any
 
 # Configure simple logging
@@ -29,9 +33,23 @@ CORS(app, resources={
     }
 })
 
+# Database configuration - modify these values directly
+DB_CONFIG = {
+    'dbname': 'shop_data',
+    'user': 'soubhikghosh',
+    'password': 'hdfc@123',  # Replace with your actual password
+    'host': 'localhost',
+    'port': '5432'
+}
+
 # Configure Google API
 GOOGLE_API_KEY = "AIzaSyCD6DGeERwWQbBC6BK1Hq0ecagQj72rqyQ"
 genai.configure(api_key=GOOGLE_API_KEY)
+
+# Other configuration
+AUDIT_FOLDER = "audit"
+PORT = 5001
+DEBUG = True
 
 @app.after_request
 def after_request(response):
@@ -52,6 +70,98 @@ def log_response(response):
     logger.info(f"Response status: {response.status_code}")
     return response
 
+def get_db_connection():
+    """Create the database if it doesn't exist and return a connection."""
+    try:
+        # First try to connect to the default postgres database to check if our database exists
+        conn = psycopg2.connect(
+            dbname='postgres',
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            host=DB_CONFIG['host'],
+            port=DB_CONFIG['port']
+        )
+        conn.autocommit = True
+        cursor = conn.cursor()
+        
+        # Check if our database exists
+        cursor.execute(f"SELECT 1 FROM pg_catalog.pg_database WHERE datname = %s", (DB_CONFIG['dbname'],))
+        exists = cursor.fetchone()
+        
+        # Create database if it doesn't exist
+        if not exists:
+            logger.info(f"Database '{DB_CONFIG['dbname']}' does not exist. Creating...")
+            cursor.execute(f"CREATE DATABASE {DB_CONFIG['dbname']}")
+            logger.info(f"Database '{DB_CONFIG['dbname']}' created successfully")
+        
+        cursor.close()
+        conn.close()
+        
+        # Now connect to our actual database
+        conn = psycopg2.connect(**DB_CONFIG)
+        logger.info(f"Connected to database '{DB_CONFIG['dbname']}'")
+        return conn
+    except Exception as e:
+        logger.error(f"Database connection error: {str(e)}")
+        raise
+
+def init_db():
+    """Initialize database tables if they don't exist."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Create shops table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS shops (
+            id SERIAL PRIMARY KEY,
+            location_data JSONB,
+            shop_inference JSONB,
+            image_data BYTEA,
+            created_at TIMESTAMP
+        )
+        ''')
+        
+        # Create index for faster queries
+        cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_shops_created_at ON shops(created_at);
+        ''')
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info("Database tables initialized successfully")
+    except Exception as e:
+        logger.error(f"Database initialization error: {str(e)}")
+        raise
+
+def store_shop_data(location_data, shop_inference, image_data):
+    """Store shop data in the database."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+        INSERT INTO shops (location_data, shop_inference, image_data, created_at)
+        VALUES (%s, %s, %s, %s)
+        RETURNING id
+        ''', (
+            Json(location_data),
+            Json(shop_inference),
+            image_data,
+            datetime.now()
+        ))
+        
+        shop_id = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        logger.info(f"Shop data stored successfully with ID: {shop_id}")
+        return shop_id
+    except Exception as e:
+        logger.error(f"Error storing shop data: {str(e)}")
+        raise
 
 def create_analysis_prompt(image_type: str = "shop") -> str:
     """Creates a robust prompt for multilingual image analysis."""
@@ -190,24 +300,84 @@ def analyze_shop():
                 "error": "Empty image data",
                 "status": "error"
             }), 400
-            
-        # Save image to audit folder
-        audit_folder = "audit"
-        if not os.path.exists(audit_folder):
-            os.makedirs(audit_folder)
-            logger.info(f"Created audit folder: {audit_folder}")
-            
-        timestamp = time.strftime("%Y%m%d%H%M%S")
-        image_path = os.path.join(audit_folder, f"{timestamp}.jpg")
-        
-        with open(image_path, "wb") as f:
-            f.write(image_data)
-        logger.info(f"Saved audit image to {image_path}")
 
         analysis_result = analyze_image(image_data)
         
         return jsonify(analysis_result), 200
 
+    except Exception as e:
+        logger.error(f"Error processing request: {str(e)}")
+        return jsonify({
+            "error": "Internal server error",
+            "status": "error"
+        }), 500
+
+@app.route('/submit-shop', methods=['POST', 'OPTIONS'])
+def submit_shop():
+    """Endpoint to accept shop location, inference, and image."""
+    if request.method == 'OPTIONS':
+        return '', 204
+
+    try:
+        # Check if image is provided
+        if 'image' not in request.files:
+            logger.warning("No image file in request")
+            return jsonify({
+                "error": "No image provided",
+                "status": "error"
+            }), 400
+        
+        # Get image data
+        image_file = request.files['image']
+        image_data = image_file.read()
+        
+        if not image_data:
+            logger.warning("Empty image data received")
+            return jsonify({
+                "error": "Empty image data",
+                "status": "error"
+            }), 400
+        
+        # Get JSON data
+        if not request.form.get('shop_data'):
+            logger.warning("No shop data in request")
+            return jsonify({
+                "error": "No shop data provided",
+                "status": "error"
+            }), 400
+            
+        shop_data = json.loads(request.form.get('shop_data'))
+        
+        # Extract required fields
+        location_data = shop_data.get('location', {})
+        shop_inference = shop_data.get('inference', {})
+        
+        # Save image to audit folder
+        if not os.path.exists(AUDIT_FOLDER):
+            os.makedirs(AUDIT_FOLDER)
+            
+        timestamp = time.strftime("%Y%m%d%H%M%S")
+        image_path = os.path.join(AUDIT_FOLDER, f"{timestamp}.jpg")
+        
+        with open(image_path, "wb") as f:
+            f.write(image_data)
+        logger.info(f"Saved audit image to {image_path}")
+        
+        # Store data in database
+        shop_id = store_shop_data(location_data, shop_inference, image_data)
+        
+        return jsonify({
+            "status": "success",
+            "shop_id": shop_id,
+            "message": "Shop data successfully stored"
+        }), 200
+        
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON data provided")
+        return jsonify({
+            "error": "Invalid JSON data",
+            "status": "error"
+        }), 400
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}")
         return jsonify({
@@ -227,4 +397,6 @@ def health_check():
 
 if __name__ == '__main__':
     logger.info("Starting shop analyzer service")
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    # Initialize database - this will create the DB if it doesn't exist
+    init_db()
+    app.run(host='0.0.0.0', port=PORT, debug=DEBUG)
