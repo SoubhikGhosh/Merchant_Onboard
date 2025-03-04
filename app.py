@@ -37,7 +37,7 @@ CORS(app, resources={
 DB_CONFIG = {
     'dbname': 'shop_data',
     'user': 'soubhikghosh',
-    'password': 'hdfc@123',  # Replace with your actual password
+    'password': '99Ghosh@',  # Replace with your actual password
     'host': 'localhost',
     'port': '5432'
 }
