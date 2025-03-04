@@ -318,6 +318,8 @@ def submit_shop():
     if request.method == 'OPTIONS':
         return '', 204
 
+    init_db()
+
     try:
         # Check if image is provided
         if 'image' not in request.files:
